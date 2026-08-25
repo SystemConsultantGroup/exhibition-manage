@@ -20,5 +20,11 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 
+# The Kubernetes workload requires a non-root runtime user. The official
+# Node Alpine image assigns its `node` user UID/GID 1000. Using numeric IDs
+# makes that identity unambiguous to Kubernetes during admission.
+RUN chown -R 1000:1000 /app
+USER 1000:1000
+
 EXPOSE 3000
 CMD ["npm", "run", "start"]
