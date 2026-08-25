@@ -1,0 +1,20 @@
+name: Deployment
+on:
+  push:
+    branches:
+      - main
+permissions:
+  attestations: write
+  contents: read
+  id-token: write
+  packages: write
+jobs:
+  build-image:
+    uses: SystemConsultantGroup/kubernetes/.github/workflows/build-image.yaml@09a37825041c30479d38dadb63cf8f5b64efe236
+    with:
+      application: exhibition
+      workload: manager
+      image: ghcr.io/systemconsultantgroup/exhibition-manage
+    secrets:
+      KUBERNETES_APP_ID: ${{ secrets.KUBERNETES_APP_ID }}
+      KUBERNETES_APP_PRIVATE_KEY: ${{ secrets.KUBERNETES_APP_PRIVATE_KEY }}
