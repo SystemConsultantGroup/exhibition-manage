@@ -45,15 +45,19 @@ async function proxyBackend(
   }
 
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
+  const upstreamRequest: RequestInit & { duplex?: "half" } = {
+    method: request.method,
+    headers,
+    body: hasBody ? request.body : undefined,
+    cache: "no-store",
+    redirect: "manual",
+  };
+
+  // Node's fetch requires this when forwarding a streaming POST/PUT body.
+  if (hasBody) upstreamRequest.duplex = "half";
 
   try {
-    const upstream = await fetch(targetUrl, {
-      method: request.method,
-      headers,
-      body: hasBody ? request.body : undefined,
-      cache: "no-store",
-      redirect: "manual",
-    });
+    const upstream = await fetch(targetUrl, upstreamRequest);
 
     const responseHeaders = new Headers({
       "Cache-Control": "private, no-store",
@@ -69,7 +73,17 @@ async function proxyBackend(
       statusText: upstream.statusText,
       headers: responseHeaders,
     });
-  } catch {
+  } catch (error) {
+    // Do not return upstream details to the browser, but retain the network
+    // failure in the workload log so deployment issues can be diagnosed.
+    const cause = error instanceof Error ? error.cause : undefined;
+    console.error("Backend API proxy request failed", {
+      method: request.method,
+      targetOrigin: targetUrl.origin,
+      path: targetUrl.pathname,
+      error: error instanceof Error ? error.message : String(error),
+      cause: cause instanceof Error ? cause.message : cause ? String(cause) : undefined,
+    });
     return jsonError("백엔드 API에 연결할 수 없습니다.", 502);
   }
 }
