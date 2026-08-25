@@ -24,7 +24,7 @@ A Korean-language admin dashboard for managing online exhibitions. It supports e
    NEXT_PUBLIC_KAKAO_REST_API_KEY=your_kakao_rest_api_key
    ```
 
-   `API_BASE_URL` is required. It is used to forward `/api/backend/*` requests to the backend API and to read tenant data.
+`API_BASE_URL` is required at runtime. It is used to forward `/api/backend/*` requests to the backend API and to read tenant data.
 
 3. Start the development server:
 
@@ -45,13 +45,16 @@ npm run lint   # Run linting
 
 ## Docker
 
-Build the image by passing the required values as build arguments. Environment files are not copied into the image.
+`API_BASE_URL` is read when the container handles a request, so inject it when starting the container. Only `NEXT_PUBLIC_*` values need to be supplied while building the image. Environment files are not copied into the image.
 
 ```bash
 docker build \
-  --build-arg API_BASE_URL=https://your-api-server.example.com \
   --build-arg NEXT_PUBLIC_KAKAO_REST_API_KEY=your_kakao_rest_api_key \
   -t exhibition-admin .
+
+docker run -p 3000:3000 \
+  -e API_BASE_URL=https://your-api-server.example.com \
+  exhibition-admin
 ```
 
 `NEXT_PUBLIC_*` values are embedded in the browser bundle by Next.js, so only use values intended to be public.
