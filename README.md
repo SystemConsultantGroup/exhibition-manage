@@ -22,7 +22,6 @@ A Korean-language admin dashboard for managing online exhibitions. It supports e
    ```env
    API_BASE_URL=https://your-api-server.example.com
    NEXT_PUBLIC_KAKAO_REST_API_KEY=your_kakao_rest_api_key
-   NEXT_PUBLIC_KAKAO_REDIRECT_URI=http://localhost:3000/login
    ```
 
    `API_BASE_URL` is required. It is used to forward `/api/backend/*` requests to the backend API and to read tenant data.
@@ -44,6 +43,19 @@ npm run start  # Start the production server
 npm run lint   # Run linting
 ```
 
+## Docker
+
+Build the image by passing the required values as build arguments. Environment files are not copied into the image.
+
+```bash
+docker build \
+  --build-arg API_BASE_URL=https://your-api-server.example.com \
+  --build-arg NEXT_PUBLIC_KAKAO_REST_API_KEY=your_kakao_rest_api_key \
+  -t exhibition-admin .
+```
+
+`NEXT_PUBLIC_*` values are embedded in the browser bundle by Next.js, so only use values intended to be public.
+
 ## Project structure
 
 ```text
@@ -54,4 +66,4 @@ src/lib/         API helpers, authentication helpers, and TypeScript types
 
 ## Authentication
 
-Administrators sign in with Kakao. The Kakao app's redirect URI must match `NEXT_PUBLIC_KAKAO_REDIRECT_URI`; users without a completed profile are sent to the registration page.
+Administrators sign in with Kakao. The Kakao app's redirect URI must be registered as `<current-domain>/login` (for example, `http://localhost:3000/login`); users without a completed profile are sent to the registration page.
