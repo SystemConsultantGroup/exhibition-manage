@@ -15,7 +15,7 @@ jobs:
       application: exhibition
       workload: manager
       image: ghcr.io/systemconsultantgroup/exhibition-manage
-      build-args: |
+      build_args: |
         NEXT_PUBLIC_KAKAO_REST_API_KEY=${{ vars.NEXT_PUBLIC_KAKAO_REST_API_KEY }}
     secrets:
       KUBERNETES_APP_ID: ${{ secrets.KUBERNETES_APP_ID }}
