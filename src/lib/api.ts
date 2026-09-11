@@ -17,7 +17,7 @@ export async function apiFetch(
   options: ApiOptions = {}
 ): Promise<Response> {
   const { exhibitionId, tenantDomain, headers: extraHeaders, ...rest } = options;
-  let headers: Record<string, string> = {};
+  const headers: Record<string, string> = {};
   if (extraHeaders instanceof Headers) {
     extraHeaders.forEach((v, k) => {
       headers[k] = v;

@@ -25,7 +25,7 @@ export default function NewExhibitionPage() {
     e.preventDefault();
     setSaving(true);
     try {
-      const created = await apiMultipart<Exhibition>("/admin/exhibitions", [
+      await apiMultipart<Exhibition>("/admin/exhibitions", [
         {
           name: "request",
           json: {
