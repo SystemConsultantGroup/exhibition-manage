@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Boxes } from "lucide-react";
 import { kakaoLogin, redirectToKakaoLogin, saveTokens } from "@/lib/auth";
@@ -11,14 +11,25 @@ function LoginInner() {
   const searchParams = useSearchParams();
   const { refreshMe } = useAuth();
   const [processing, setProcessing] = useState(false);
+  const startedRef = useRef(false);
 
   useEffect(() => {
     const code = searchParams.get("code");
-    if (!code) return;
+    const oauthError = searchParams.get("error");
+    if ((!code && !oauthError) || startedRef.current) return;
+    startedRef.current = true;
+
+    // 인가 코드가 브라우저 기록·리퍼러에 오래 남지 않도록 즉시 제거한다.
+    window.history.replaceState(null, "", "/login");
+    if (oauthError) {
+      alert("카카오 로그인이 취소되었거나 실패했습니다.");
+      return;
+    }
+
     setProcessing(true);
     (async () => {
       try {
-        const tokens = await kakaoLogin(code);
+        const tokens = await kakaoLogin(code!, searchParams.get("state"));
         saveTokens(tokens);
         await refreshMe();
         if (tokens.registrationRequired) {
@@ -53,7 +64,7 @@ function LoginInner() {
           </p>
         </div>
 
-        {searchParams.get("code") || processing ? (
+        {processing ? (
           <div className="flex flex-col items-center gap-3 py-4">
             <div className="h-7 w-7 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
             <p className="text-sm text-slate-400">로그인 처리 중…</p>

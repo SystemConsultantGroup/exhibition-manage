@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { Me } from "@/lib/types";
 import { clearTokens, ensureAccessToken } from "@/lib/auth";
 
@@ -19,6 +20,7 @@ const AuthContext = createContext<AuthState>({
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
   const [me, setMe] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -33,8 +35,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (r.ok) setMe(await r.json());
-      else if (r.status === 401) {
-        clearTokens();
+      else {
+        if (r.status === 401) clearTokens();
         setMe(null);
       }
     } catch {
@@ -48,7 +50,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = () => {
     clearTokens();
-    window.location.href = "/login";
+    setMe(null);
+    router.replace("/login");
   };
 
   return (

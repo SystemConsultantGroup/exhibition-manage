@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Plus, Pencil, Trash2, Search } from "lucide-react";
 import type { Exhibition } from "@/lib/types";
 import { apiFetch, apiJson } from "@/lib/api";
@@ -14,19 +14,27 @@ export default function ExhibitionsPage() {
   const [q, setQ] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const data = await apiJson<{ items: Exhibition[]; total: number }>(
-        `/admin/exhibitions${q ? `?q=${encodeURIComponent(q)}` : ""}`
+        "/admin/exhibitions"
       );
       setItems(data.items);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
     }
-  };
+  }, []);
 
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [q]);
+  useEffect(() => { void load(); }, [load]);
+
+  const normalizedQuery = q.trim().toLocaleLowerCase("ko-KR");
+  const filteredItems = normalizedQuery
+    ? items.filter((exhibition) =>
+        [exhibition.name, exhibition.slug, exhibition.defaultDomain, exhibition.customDomain]
+          .some((value) => value?.toLocaleLowerCase("ko-KR").includes(normalizedQuery))
+      )
+    : items;
 
   const remove = async (ex: Exhibition) => {
     if (!confirm(`${ex.name} 전시를 삭제하시겠습니까?\n복구할 수 없습니다.`)) return;
@@ -60,11 +68,11 @@ export default function ExhibitionsPage() {
         />
       </div>
 
-      {items.length === 0 ? (
-        <EmptyState message="전시가 없습니다." />
+      {filteredItems.length === 0 ? (
+        <EmptyState message={q ? "검색 결과가 없습니다." : "전시가 없습니다."} />
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {items.map((ex) => {
+          {filteredItems.map((ex) => {
             const isManaged = managed.some((m) => m.id === ex.id);
             return (
               <div key={ex.id} className="card group transition-all hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-md">

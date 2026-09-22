@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import type { Exhibition } from "@/lib/types";
 import { apiFetch } from "@/lib/api";
 import { useExhibition } from "@/components/ExhibitionProvider";
+import { DOMAIN_INPUT_PATTERN, isSafeExternalUrl } from "@/lib/validation";
 
 export default function EditExhibitionPage() {
   const { id } = useParams<{ id: string }>();
@@ -25,6 +26,10 @@ export default function EditExhibitionPage() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (form.popupUrl && !isSafeExternalUrl(form.popupUrl)) {
+      alert("팝업 링크는 사용자 정보가 없는 HTTP(S) URL이어야 합니다.");
+      return;
+    }
     setSaving(true);
     try {
       const res = await apiFetch(`/admin/exhibitions/${id}`, {
@@ -67,11 +72,11 @@ export default function EditExhibitionPage() {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="label">기본 도메인 *</label>
-            <input required className="input" value={form.defaultDomain ?? ""} onChange={set("defaultDomain")} />
+            <input required pattern={DOMAIN_INPUT_PATTERN} className="input" value={form.defaultDomain ?? ""} onChange={set("defaultDomain")} />
           </div>
           <div>
             <label className="label">커스텀 도메인</label>
-            <input className="input" value={form.customDomainInput ?? ""} onChange={set("customDomainInput")} />
+            <input pattern={DOMAIN_INPUT_PATTERN} className="input" value={form.customDomainInput ?? ""} onChange={set("customDomainInput")} />
           </div>
         </div>
         <div>
@@ -87,7 +92,7 @@ export default function EditExhibitionPage() {
         {form.popupEnabled && (
           <div>
             <label className="label">팝업 링크 URL</label>
-            <input className="input" value={form.popupUrl ?? ""} onChange={set("popupUrl")} />
+            <input type="url" inputMode="url" className="input" value={form.popupUrl ?? ""} onChange={set("popupUrl")} />
           </div>
         )}
         <div>

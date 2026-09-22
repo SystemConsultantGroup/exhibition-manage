@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { useEffect } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard, Boxes, FolderTree, CalendarClock,
   Newspaper, Settings2, LogOut,
@@ -19,8 +20,13 @@ const NAV = [
 
 export function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { me, loading, logout } = useAuth();
   const { exhibitions, selected, select, loading: exLoading } = useExhibition();
+
+  useEffect(() => {
+    if (!loading && !me) router.replace("/login");
+  }, [loading, me, router]);
 
   if (loading || exLoading) {
     return (
@@ -33,10 +39,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!me) {
-    if (typeof window !== "undefined") window.location.href = "/login";
-    return null;
-  }
+  if (!me) return null;
 
   return (
     <div className="flex min-h-screen">

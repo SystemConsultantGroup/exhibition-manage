@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import type { Exhibition } from "@/lib/types";
 import { apiMultipart } from "@/lib/api";
+import { DOMAIN_INPUT_PATTERN, isSafeExternalUrl } from "@/lib/validation";
 
 export default function NewExhibitionPage() {
   const router = useRouter();
@@ -23,6 +24,10 @@ export default function NewExhibitionPage() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (form.popupUrl && !isSafeExternalUrl(form.popupUrl)) {
+      alert("팝업 링크는 사용자 정보가 없는 HTTP(S) URL이어야 합니다.");
+      return;
+    }
     setSaving(true);
     try {
       await apiMultipart<Exhibition>("/admin/exhibitions", [
@@ -73,9 +78,14 @@ export default function NewExhibitionPage() {
           </div>
           <div>
             <label className="label">기본 도메인 *</label>
-            <input required className="input" placeholder="example.com"
+            <input required pattern={DOMAIN_INPUT_PATTERN} className="input" placeholder="example.com"
               value={form.defaultDomain} onChange={set("defaultDomain")} />
           </div>
+        </div>
+        <div>
+          <label className="label">커스텀 도메인</label>
+          <input pattern={DOMAIN_INPUT_PATTERN} className="input" placeholder="custom.example.com"
+            value={form.customDomain} onChange={set("customDomain")} />
         </div>
         <div>
           <label className="label">설명</label>
@@ -96,7 +106,7 @@ export default function NewExhibitionPage() {
         {form.popupEnabled && (
           <div>
             <label className="label">팝업 링크 URL</label>
-            <input className="input" value={form.popupUrl} onChange={set("popupUrl")} />
+            <input type="url" inputMode="url" className="input" value={form.popupUrl} onChange={set("popupUrl")} />
           </div>
         )}
         <div className="grid grid-cols-2 gap-4">

@@ -4,7 +4,7 @@ A Korean-language admin dashboard for managing online exhibitions. It supports e
 
 ## Tech stack
 
-- Next.js 15, React 19, and TypeScript
+- Next.js 16, React 19, and TypeScript
 - Tailwind CSS
 - Kakao OAuth login
 - External backend API (proxied through the app)

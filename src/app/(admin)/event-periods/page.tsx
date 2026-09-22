@@ -39,12 +39,18 @@ export default function EventPeriodsPage() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selected) return;
+    const startTime = new Date(form.startTime);
+    const endTime = new Date(form.endTime);
+    if (!Number.isFinite(startTime.getTime()) || !Number.isFinite(endTime.getTime()) || endTime <= startTime) {
+      alert("종료 시각은 시작 시각보다 늦어야 합니다.");
+      return;
+    }
     setSaving(true);
     try {
       const body = JSON.stringify({
         name: form.name,
-        startTime: new Date(form.startTime).toISOString(),
-        endTime: new Date(form.endTime).toISOString(),
+        startTime: startTime.toISOString(),
+        endTime: endTime.toISOString(),
       });
       const res = editingId
         ? await apiFetch(`/admin/event-periods/${editingId}`, {

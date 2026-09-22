@@ -1,4 +1,7 @@
 import { NextResponse } from "next/server";
+import { getApiBaseUrl, isSameOriginBrowserRequest } from "@/lib/server/proxy-security";
+
+const UPSTREAM_TIMEOUT_MS = 30_000;
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,8 +48,12 @@ async function proxyTenantRead(
   request: Request,
   context: { params: Promise<{ path: string[] }> }
 ) {
-  const apiBaseUrl = process.env.API_BASE_URL;
-  if (!apiBaseUrl) return jsonError("API 서버 주소가 설정되지 않았습니다.", 500);
+  if (!isSameOriginBrowserRequest(request)) {
+    return jsonError("교차 출처 요청은 허용되지 않습니다.", 403);
+  }
+
+  const baseUrl = getApiBaseUrl(process.env.API_BASE_URL);
+  if (!baseUrl) return jsonError("API 서버 주소가 올바르게 설정되지 않았습니다.", 500);
 
   const { path: segments } = await context.params;
   const path = segments.join("/");
@@ -58,21 +65,21 @@ async function proxyTenantRead(
   const incomingUrl = new URL(request.url);
   if (incomingUrl.search.length > 4096) return jsonError("요청 쿼리가 너무 깁니다.", 414);
 
-  let targetUrl: URL;
-  try {
-    const baseUrl = new URL(apiBaseUrl.endsWith("/") ? apiBaseUrl : `${apiBaseUrl}/`);
-    targetUrl = new URL(path, baseUrl);
-    targetUrl.search = incomingUrl.search;
-  } catch {
-    return jsonError("API 서버 주소가 올바르지 않습니다.", 500);
-  }
+  const targetUrl = new URL(path, baseUrl);
+  targetUrl.search = incomingUrl.search;
 
   const headers = new Headers({
     Accept: request.headers.get("accept") ?? "application/json",
     Origin: `https://${domain}`,
   });
+  // 공개 조회도 로그인 사용자의 isLike 등 선택적 사용자 문맥을 반환할 수 있다.
   const authorization = request.headers.get("authorization");
-  if (authorization) headers.set("Authorization", authorization);
+  if (authorization) {
+    if (authorization.length > 8192 || !/^Bearer [A-Za-z0-9._~+\/-]+=*$/.test(authorization)) {
+      return jsonError("유효하지 않은 인증 토큰 형식입니다.", 401);
+    }
+    headers.set("authorization", authorization);
+  }
 
   try {
     const upstream = await fetch(targetUrl, {
@@ -80,6 +87,7 @@ async function proxyTenantRead(
       headers,
       cache: "no-store",
       redirect: "manual",
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)]),
     });
 
     const responseHeaders = new Headers({

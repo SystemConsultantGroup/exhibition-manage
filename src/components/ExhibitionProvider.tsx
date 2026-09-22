@@ -1,7 +1,9 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { Exhibition } from "@/lib/types";
+import { apiFetch } from "@/lib/api";
+import { useAuth } from "./AuthProvider";
 
 interface ExhibitionState {
   exhibitions: Exhibition[];
@@ -20,32 +22,43 @@ const ExhibitionContext = createContext<ExhibitionState>({
 const STORAGE_KEY = "admin.selectedExhibitionId";
 
 export function ExhibitionProvider({ children }: { children: React.ReactNode }) {
+  const { me, loading: authLoading } = useAuth();
   const [exhibitions, setExhibitions] = useState<Exhibition[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
-      const r = await fetch("/api/backend/admin/exhibitions", {
-        headers: { Authorization: `Bearer ${localStorage.getItem("admin.accessToken")}` },
-      });
-      if (!r.ok) return;
-      const data = await r.json();
-      setExhibitions(data.items || []);
+      const response = await apiFetch("/admin/exhibitions");
+      if (!response.ok) throw new Error(`전시 목록 조회 실패 (${response.status})`);
+      const data = (await response.json()) as { items?: Exhibition[] };
+      const items = Array.isArray(data.items) ? data.items : [];
+      setExhibitions(items);
       const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored && data.items.some((e: Exhibition) => e.id === stored)) {
+      if (stored && items.some((exhibition) => exhibition.id === stored)) {
         setSelectedId(stored);
-      } else if (data.items.length > 0) {
-        setSelectedId(data.items[0].id);
+      } else {
+        setSelectedId(items[0]?.id ?? null);
       }
+    } catch {
+      setExhibitions([]);
+      setSelectedId(null);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    load();
-  }, []);
+    if (authLoading) return;
+    if (!me) {
+      setExhibitions([]);
+      setSelectedId(null);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    void load();
+  }, [authLoading, me, load]);
 
   const select = (id: string) => {
     setSelectedId(id);

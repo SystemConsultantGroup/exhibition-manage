@@ -1,6 +1,6 @@
 "use client";
 
-import { ensureAccessToken } from "./auth";
+import { ensureAccessToken, refreshAccessTokenAfterUnauthorized } from "./auth";
 
 type ApiOptions = RequestInit & {
   exhibitionId?: string;
@@ -16,6 +16,10 @@ export async function apiFetch(
   path: string,
   options: ApiOptions = {}
 ): Promise<Response> {
+  if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\") || /[\r\n\0]/.test(path)) {
+    throw new Error("유효하지 않은 API 경로입니다.");
+  }
+
   const { exhibitionId, tenantDomain, headers: extraHeaders, ...rest } = options;
   const headers: Record<string, string> = {};
   if (extraHeaders instanceof Headers) {
@@ -30,7 +34,7 @@ export async function apiFetch(
 
   const token = await ensureAccessToken();
   if (!token) {
-    window.location.href = "/login";
+    window.location.replace("/login");
     throw new Error("인증이 필요합니다.");
   }
   headers["Authorization"] = `Bearer ${token}`;
@@ -45,8 +49,8 @@ export async function apiFetch(
   let res = await doFetch();
   // 토큰이 서버에서 만료된 경우 한 번 재시도
   if (res.status === 401 && !path.startsWith("/auth/")) {
-    const refreshed = await ensureAccessToken();
-    if (refreshed && refreshed !== token) {
+    const refreshed = await refreshAccessTokenAfterUnauthorized(token);
+    if (refreshed) {
       headers["Authorization"] = `Bearer ${refreshed}`;
       res = await fetch(requestUrl, { ...rest, headers });
     }
@@ -76,6 +80,12 @@ export async function apiMultipart<T>(
   fields: { name: string; json?: unknown; file?: File }[],
   exhibitionId?: string
 ): Promise<T> {
+  const files = fields.flatMap((field) => (field.file ? [field.file] : []));
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  if (totalBytes > 100 * 1024 * 1024) {
+    throw new Error("업로드 파일의 전체 크기는 100MB 이하여야 합니다.");
+  }
+
   const fd = new FormData();
   for (const f of fields) {
     if (f.json !== undefined) {

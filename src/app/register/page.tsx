@@ -29,9 +29,9 @@ export default function RegisterPage() {
   useEffect(() => {
     // 토큰이 없으면 로그인부터
     if (!getAccessToken()) {
-      window.location.href = "/login";
+      router.replace("/login");
     }
-  }, []);
+  }, [router]);
 
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
