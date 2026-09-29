@@ -10,6 +10,7 @@ const MAX_QUERY_LENGTH = 4096;
 const MAX_REQUEST_BYTES = 100 * 1024 * 1024;
 const MAX_BULK_UPLOAD_BYTES = 1024 * 1024 * 1024;
 const UPSTREAM_TIMEOUT_MS = 120_000;
+const BULK_UPLOAD_TIMEOUT_MS = 10 * 60_000;
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,6 +47,7 @@ async function proxyBackend(
 	if (!path || !isAllowedBackendRoute(path, request.method)) {
 		return jsonError("허용되지 않은 API 경로 또는 메서드입니다.", 404);
 	}
+	const isBulkUpload = path === "admin/items/bulk/upload";
 
 	let incomingUrl: URL;
 	try {
@@ -60,10 +62,7 @@ async function proxyBackend(
 	const contentLength = request.headers.get("content-length");
 	if (contentLength) {
 		const bytes = Number(contentLength);
-		const maxBytes =
-			path === "admin/items/bulk/upload"
-				? MAX_BULK_UPLOAD_BYTES
-				: MAX_REQUEST_BYTES;
+		const maxBytes = isBulkUpload ? MAX_BULK_UPLOAD_BYTES : MAX_REQUEST_BYTES;
 		if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > maxBytes) {
 			return jsonError("요청 본문이 너무 큽니다.", 413);
 		}
@@ -120,7 +119,9 @@ async function proxyBackend(
 		redirect: "manual",
 		signal: AbortSignal.any([
 			request.signal,
-			AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+			AbortSignal.timeout(
+				isBulkUpload ? BULK_UPLOAD_TIMEOUT_MS : UPSTREAM_TIMEOUT_MS,
+			),
 		]),
 	};
 
