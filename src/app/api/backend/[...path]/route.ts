@@ -8,9 +8,9 @@ import {
 
 const MAX_QUERY_LENGTH = 4096;
 const MAX_REQUEST_BYTES = 100 * 1024 * 1024;
-const MAX_BULK_UPLOAD_BYTES = 1024 * 1024 * 1024;
+const MAX_BULK_UPLOAD_BYTES = 10 * 1024 * 1024 * 1024;
 const UPSTREAM_TIMEOUT_MS = 120_000;
-const BULK_UPLOAD_TIMEOUT_MS = 10 * 60_000;
+const BULK_UPLOAD_TIMEOUT_MS = 15 * 60_000;
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
