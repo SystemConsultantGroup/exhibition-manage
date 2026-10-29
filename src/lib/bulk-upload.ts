@@ -37,7 +37,8 @@ function sendMultipart(
     xhr.setRequestHeader("Accept", "application/json");
     xhr.setRequestHeader("X-Upload-Id", uploadId);
     // Let the browser serialize FormData and set its multipart boundary.
-    // The proxy enforces the upload deadline; there is no shorter browser timer.
+    // The proxy bounds stalled transfers and post-upload response waits separately.
+    // An actively progressing upload has no fixed browser/manager duration limit.
     xhr.timeout = 0;
     xhr.upload.onprogress = (event) => {
       report("uploading", event.loaded, event.lengthComputable ? event.total : null);

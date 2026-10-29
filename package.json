@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "node server.mjs",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "node tests/run-bulk-upload.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.34.0",

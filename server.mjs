@@ -1,22 +1,19 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import next from "next";
-import { getBulkUploadTimeoutMs } from "./src/lib/server/bulk-upload-settings.mjs";
+import { getBulkUploadIdleTimeoutMs, getBulkUploadResponseTimeoutMs } from "./src/lib/server/bulk-upload-settings.mjs";
+import { enforceIncomingRequestDeadline, incomingHttpTimeouts } from "./src/lib/server/incoming-request-deadline.mjs";
 
 const port = Number(process.env.PORT || 3000);
 const hostname = process.env.HOST || "0.0.0.0";
-const uploadTimeoutMs = getBulkUploadTimeoutMs();
+const uploadIdleTimeoutMs = getBulkUploadIdleTimeoutMs();
+const uploadResponseTimeoutMs = getBulkUploadResponseTimeoutMs();
 const app = next({ dev: false, hostname, port });
 await app.prepare();
 const handle = app.getRequestHandler();
 const sockets = new WeakMap();
 
-const server = createServer({
-  // next start leaves Node's default 300-second incoming-body deadline intact.
-  // Give the route's explicit upload deadline room to produce a diagnostic response.
-  requestTimeout: Math.min(2_147_483_647, uploadTimeoutMs + 60_000),
-  headersTimeout: Math.min(60_000, uploadTimeoutMs + 60_000),
-}, (req, res) => {
+const server = createServer(incomingHttpTimeouts, (req, res) => {
   const isBulk = req.method === "POST" && req.url?.split("?")[0] === "/api/backend/admin/items/bulk/upload";
   if (isBulk) {
     const incomingId = req.headers["x-upload-id"];
@@ -38,12 +35,30 @@ const server = createServer({
       if (!res.writableFinished) log("Bulk upload client connection closed before response completed");
       sockets.delete(req.socket);
     });
+  } else {
+    enforceIncomingRequestDeadline(req, res, {
+      onTimeout: () => console.error("Manager incoming HTTP body deadline expired", {
+        source: "manager_inbound_request_timeout",
+      }),
+    });
   }
   void handle(req, res).catch((error) => {
     console.error("Manager request handler failed", error);
     if (!res.headersSent) { res.statusCode = 500; res.end("Internal Server Error"); }
     else res.destroy();
   });
+});
+
+// Last-resort socket *inactivity* protection, including requests rejected before
+// the bulk route starts. Never impose an absolute duration on an active upload.
+server.setTimeout(Math.min(2_147_483_647, Math.max(uploadIdleTimeoutMs, uploadResponseTimeoutMs) + 60_000));
+server.on("timeout", (socket) => {
+  const meta = sockets.get(socket);
+  console.error("Manager HTTP socket inactive", {
+    uploadId: meta?.uploadId ?? null,
+    source: "manager_connection_idle_timeout",
+  });
+  socket.destroy();
 });
 
 server.on("clientError", (error, socket) => {
@@ -64,6 +79,8 @@ server.on("clientError", (error, socket) => {
 });
 server.listen(port, hostname, () => {
   console.info("Manager listening", {
-    hostname, port, incomingRequestTimeoutMs: server.requestTimeout, uploadTimeoutMs,
+    hostname, port, incomingRequestTimeoutMs: server.requestTimeout,
+    ordinaryIncomingRequestTimeoutMs: 300_000, socketIdleTimeoutMs: server.timeout,
+    uploadIdleTimeoutMs, uploadResponseTimeoutMs,
   });
 });

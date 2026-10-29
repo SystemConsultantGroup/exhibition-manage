@@ -1,12 +1,13 @@
 import { Agent, fetch as streamingFetch } from "undici";
-import { getBulkUploadTimeoutMs } from "./bulk-upload-settings.mjs";
+import { getBulkUploadIdleTimeoutMs, getBulkUploadResponseTimeoutMs } from "./bulk-upload-settings.mjs";
+import { createBulkUploadDeadline } from "./bulk-upload-deadline.mjs";
 import {
-  beginUploadObservation, updateUploadObservation, withUploadObservation,
+  beginUploadObservation, updateUploadObservation, watchUploadTransport, withUploadObservation,
 } from "./upload-observation";
 
 export const MAX_BULK_UPLOAD_BYTES = 10 * 1024 * 1024 * 1024;
 
-// Explicit overall deadline replaces Undici's independent default 5-minute timers.
+// Phase-aware deadlines replace Undici's independent default 5-minute timers.
 const uploadAgent = new Agent({
   headersTimeout: 0,
   bodyTimeout: 0,
@@ -46,23 +47,39 @@ export async function forwardBulkUpload(
   request: Request,
   targetUrl: URL,
   headers: Headers,
-  options: { timeoutMs?: number; maxBytes?: number } = {}
+  options: { idleTimeoutMs?: number; responseTimeoutMs?: number; maxBytes?: number } = {}
 ): Promise<Response> {
-  const timeoutMs = options.timeoutMs ?? getBulkUploadTimeoutMs();
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const signal = AbortSignal.any([request.signal, timeoutSignal]);
+  const idleTimeoutMs = options.idleTimeoutMs ?? getBulkUploadIdleTimeoutMs();
+  const responseTimeoutMs = options.responseTimeoutMs ?? getBulkUploadResponseTimeoutMs();
+  const deadline = createBulkUploadDeadline({ idleTimeoutMs, responseTimeoutMs });
+  const transferController = new AbortController();
+  const signal = AbortSignal.any([request.signal, deadline.signal, transferController.signal]);
   const contentLength = request.headers.get("content-length");
   const entry = beginUploadObservation(
     request.headers.get("x-upload-id"), headers.get("authorization") ?? "",
-    headers.get("x-exhibition-id") ?? "", contentLength ? Number(contentLength) : null, timeoutMs,
+    headers.get("x-exhibition-id") ?? "", contentLength ? Number(contentLength) : null,
+    Math.max(idleTimeoutMs, responseTimeoutMs),
   );
+  // Iterator EOF only means we read the browser body. Wait for Undici's actual
+  // body-sent event before starting the backend response budget.
+  const stopWatching = watchUploadTransport(entry, (event) => {
+    if (event === "sent") deadline.waitForResponse();
+    else deadline.uploadProgress();
+  });
   const uploadId = entry.status.id;
   let bodyReadBytes = 0;
   let limitExceeded = false;
   let incomingReadError = false;
   let bodyComplete = false;
+  const cleanup = () => {
+    deadline.dispose();
+    stopWatching();
+    // Early responses can finish while the request iterator is still waiting
+    // for browser bytes. Do not leave that reader/connection hanging forever.
+    if (!bodyComplete) transferController.abort();
+  };
   const maxBytes = options.maxBytes ?? MAX_BULK_UPLOAD_BYTES;
-  console.info("Bulk upload proxy accepted", { uploadId, contentLength, timeoutMs });
+  console.info("Bulk upload proxy accepted", { uploadId, contentLength, idleTimeoutMs, responseTimeoutMs });
 
   async function* bodyChunks() {
     if (!request.body) return;
@@ -82,6 +99,7 @@ export async function forwardBulkUpload(
           break;
         }
         bodyReadBytes += chunk.value.byteLength;
+        if (chunk.value.byteLength > 0) deadline.uploadProgress();
         updateUploadObservation(entry, { receivedBytes: bodyReadBytes });
         if (bodyReadBytes > maxBytes) {
           limitExceeded = true;
@@ -111,6 +129,9 @@ export async function forwardBulkUpload(
       signal,
       dispatcher: uploadAgent,
     }));
+    // A server may reject an upload before consuming its body. In that case,
+    // stop the transfer idle timer and bound delivery of the early response too.
+    deadline.waitForResponse();
     updateUploadObservation(entry, {
       responseReceivedAt: Date.now(), responseStatus: upstream.status,
     });
@@ -130,6 +151,7 @@ export async function forwardBulkUpload(
         try {
           const { done, value } = await reader.read();
           if (done) {
+            cleanup();
             controller.close();
             reader.releaseLock();
             console.info("Bulk upload upstream response body complete", {
@@ -138,10 +160,11 @@ export async function forwardBulkUpload(
           } else controller.enqueue(value);
         } catch (error) {
           const chain = errorChain(error);
-          const source = timeoutSignal.aborted ? "manager_upload_deadline" : "upstream_response_stream";
+          const source = deadline.failure?.source ?? "upstream_response_stream";
           const code = chain.find(item => item.code)?.code ?? null;
+          cleanup();
           updateUploadObservation(entry, { failure: {
-            source, code, message: "상위 서버의 응답 본문을 받는 중 연결이 종료되었습니다.",
+            source, code, message: deadline.failure?.message ?? "상위 서버의 응답 본문을 받는 중 연결이 종료되었습니다.",
           } });
           console.error("Bulk upload upstream response body failed", {
             uploadId, source, code, elapsedMs: Date.now() - entry.status.startedAt, errors: chain,
@@ -151,14 +174,17 @@ export async function forwardBulkUpload(
         }
       },
       async cancel(reason) {
+        cleanup();
         await reader.cancel(reason).catch(() => {});
         reader.releaseLock();
       },
     }) : null;
+    if (!reader) cleanup();
     return new Response(responseBody, {
       status: upstream.status, statusText: upstream.statusText, headers: responseHeaders,
     });
   } catch (error) {
+    cleanup();
     const chain = errorChain(error);
     const code = chain.find(item => item.code)?.code ?? null;
     let source = "proxy_backend_connection";
@@ -166,9 +192,9 @@ export async function forwardBulkUpload(
     let message = "프록시와 백엔드 사이의 요청이 실패했습니다.";
     if (limitExceeded) {
       source = "manager_size_limit"; status = 413; message = "요청 본문이 너무 큽니다.";
-    } else if (timeoutSignal.aborted) {
-      source = "manager_upload_deadline"; status = 504;
-      message = "매니저의 파일 전송·서버 응답 대기 제한 시간이 초과되었습니다.";
+    } else if (deadline.failure) {
+      source = deadline.failure.source; status = 504;
+      message = deadline.failure.message;
     } else if (request.signal.aborted) {
       source = "client_or_gateway_disconnect";
       message = "브라우저 또는 매니저 앞단에서 연결이 종료되었습니다.";

@@ -7,6 +7,8 @@ interface Entry {
   status: ProxyUploadStatus;
   ownerHash: Buffer;
   expiresAt: number;
+  retentionMs: number;
+  onTransportProgress?: (event: "chunk" | "sent") => void;
 }
 interface ObservationStore {
   records: Map<string, Entry>;
@@ -15,7 +17,13 @@ interface ObservationStore {
 }
 const globalStore = globalThis as typeof globalThis & { __uploadObservation?: ObservationStore };
 
-function touch(entry: Entry) { entry.status.updatedAt = Date.now(); }
+function touch(entry: Entry) {
+  const now = Date.now();
+  entry.status.updatedAt = now;
+  // Active uploads can run longer than the response timeout. Keep their
+  // observations alive as bytes move, without retaining abandoned records forever.
+  entry.expiresAt = now + entry.retentionMs;
+}
 
 function createStore(): ObservationStore {
   const store: ObservationStore = {
@@ -39,14 +47,20 @@ function createStore(): ObservationStore {
     if (entry) {
       entry.status.sentBytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
       touch(entry);
+      entry.onTransportProgress?.("chunk");
     }
   });
   subscribe("undici:request:bodySent", (message) => {
-    const { request } = message as { request: object };
+    const { request } = message as { request: { aborted?: boolean; error?: unknown } };
     const entry = store.requests.get(request);
-    if (entry) {
+    // Undici can emit this during iterator teardown after cancellation/errors.
+    // Do not report a partial/cancelled body as successfully sent.
+    if (entry && !request.aborted && !request.error && !entry.status.failure
+      && entry.status.receivingFinishedAt !== null
+      && entry.status.sentBytes === entry.status.receivedBytes) {
       entry.status.sendingFinishedAt = Date.now();
       touch(entry);
+      entry.onTransportProgress?.("sent");
       console.info("Bulk upload upstream socket body sent", {
         uploadId: entry.status.id,
         elapsedMs: Date.now() - entry.status.startedAt,
@@ -79,6 +93,7 @@ export function beginUploadObservation(
   const entry: Entry = {
     ownerHash: ownerHash(authorization, exhibitionId),
     expiresAt: now + timeoutMs + 5 * 60_000,
+    retentionMs: timeoutMs + 5 * 60_000,
     status: {
       id: requestedId ?? randomUUID(), startedAt: now, updatedAt: now,
       receivedBytes: 0, sentBytes: 0, totalBytes,
@@ -96,6 +111,11 @@ export function getUploadObservation(id: string, authorization: string, exhibiti
   if (!entry || entry.expiresAt < Date.now()) return null;
   if (!timingSafeEqual(entry.ownerHash, ownerHash(authorization, exhibitionId))) return null;
   return entry.status;
+}
+
+export function watchUploadTransport(entry: Entry, listener: (event: "chunk" | "sent") => void): () => void {
+  entry.onTransportProgress = listener;
+  return () => { delete entry.onTransportProgress; };
 }
 
 export function withUploadObservation<T>(entry: Entry, action: () => T): T {
