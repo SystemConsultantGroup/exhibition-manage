@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import {
+	BulkUploadProxyError,
+	forwardBulkUpload,
+	MAX_BULK_UPLOAD_BYTES,
+} from "@/lib/server/bulk-upload-proxy";
+import {
 	getApiBaseUrl,
 	isAllowedBackendRoute,
 	isSameOriginBrowserRequest,
@@ -8,14 +13,12 @@ import {
 
 const MAX_QUERY_LENGTH = 4096;
 const MAX_REQUEST_BYTES = 100 * 1024 * 1024;
-const MAX_BULK_UPLOAD_BYTES = 10 * 1024 * 1024 * 1024;
 const UPSTREAM_TIMEOUT_MS = 120_000;
-const BULK_UPLOAD_TIMEOUT_MS = 15 * 60_000;
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function jsonError(message: string, status: number) {
+function jsonError(message: string, status: number, extraHeaders: Record<string, string> = {}) {
 	return NextResponse.json(
 		{ message },
 		{
@@ -23,6 +26,7 @@ function jsonError(message: string, status: number) {
 			headers: {
 				"Cache-Control": "private, no-store",
 				"X-Content-Type-Options": "nosniff",
+				...extraHeaders,
 			},
 		},
 	);
@@ -110,6 +114,11 @@ async function proxyBackend(
 		headers.set("x-exhibition-id", exhibitionId);
 	}
 
+	const uploadId = request.headers.get("x-upload-id");
+	if (isBulkUpload && uploadId && !UUID_PATTERN.test(uploadId)) {
+		return jsonError("유효하지 않은 업로드 ID입니다.", 400);
+	}
+
 	const hasBody = request.method !== "GET" && request.method !== "HEAD";
 	const upstreamRequest: RequestInit & { duplex?: "half" } = {
 		method: request.method,
@@ -117,11 +126,9 @@ async function proxyBackend(
 		body: hasBody ? request.body : undefined,
 		cache: "no-store",
 		redirect: "manual",
-		signal: AbortSignal.any([
+		signal: isBulkUpload ? undefined : AbortSignal.any([
 			request.signal,
-			AbortSignal.timeout(
-				isBulkUpload ? BULK_UPLOAD_TIMEOUT_MS : UPSTREAM_TIMEOUT_MS,
-			),
+			AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
 		]),
 	};
 
@@ -129,7 +136,9 @@ async function proxyBackend(
 	if (hasBody) upstreamRequest.duplex = "half";
 
 	try {
-		const upstream = await fetch(targetUrl, upstreamRequest);
+		const upstream = isBulkUpload
+			? await forwardBulkUpload(request, targetUrl, headers)
+			: await fetch(targetUrl, upstreamRequest);
 
 		const responseHeaders = new Headers({
 			"Cache-Control": "private, no-store",
@@ -139,6 +148,8 @@ async function proxyBackend(
 			"content-type",
 			"content-disposition",
 			"www-authenticate",
+			"x-upload-id",
+			"x-upload-error-source",
 		]) {
 			const value = upstream.headers.get(name);
 			if (value) responseHeaders.set(name, value);
@@ -165,6 +176,12 @@ async function proxyBackend(
 						? String(cause)
 						: undefined,
 		});
+		if (error instanceof BulkUploadProxyError) {
+			return jsonError(error.message, error.status, {
+				"X-Upload-Id": error.uploadId,
+				"X-Upload-Error-Source": error.source,
+			});
+		}
 		return jsonError("백엔드 API에 연결할 수 없습니다.", 502);
 	}
 }

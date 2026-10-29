@@ -1,4 +1,3 @@
-/** @type {import('next').NextConfig} */
 const isDevelopment = process.env.NODE_ENV === "development";
 
 const contentSecurityPolicy = [
@@ -27,8 +26,11 @@ const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
 ];
 
+/** @type {import('next').NextConfig} */
 const nextConfig = {
   poweredByHeader: false,
+  // Keep the upload transport and its socket diagnostics in the Node runtime.
+  serverExternalPackages: ["undici"],
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

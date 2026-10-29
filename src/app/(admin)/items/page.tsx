@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Category, EventPeriod, Item, PagedResponse } from "@/lib/types";
 import { apiFetch, apiJson, buildQuery } from "@/lib/api";
+import { uploadBulkItems, type BulkUploadProgress } from "@/lib/bulk-upload";
+import { BulkUploadStatus } from "@/components/BulkUploadStatus";
 import { useExhibition } from "@/components/ExhibitionProvider";
 
 export default function ItemsPage() {
@@ -19,6 +21,29 @@ export default function ItemsPage() {
   const [awardedFilter, setAwardedFilter] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const mediaRef = useRef<HTMLInputElement>(null);
+  const bulkUploadingRef = useRef(false);
+  const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<BulkUploadProgress | null>(null);
+  const [bulkElapsedSeconds, setBulkElapsedSeconds] = useState(0);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkSummary, setBulkSummary] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!bulkUploading) return;
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      setBulkElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeLeaving);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("beforeunload", warnBeforeLeaving);
+    };
+  }, [bulkUploading]);
 
   const load = useCallback(async () => {
     if (!selected) return;
@@ -66,17 +91,27 @@ export default function ItemsPage() {
   };
 
   const bulkUpload = async () => {
-    if (!selected) return;
+    if (!selected || bulkUploadingRef.current) return;
     const file = fileRef.current?.files?.[0];
     if (!file) { alert("엑셀 파일을 선택하세요."); return; }
-    const fd = new FormData();
-    fd.append("file", file);
-    for (const f of Array.from(mediaRef.current?.files ?? [])) fd.append("mediaFiles", f);
-    const res = await apiFetch("/admin/items/bulk/upload", { method: "POST", body: fd, exhibitionId: selected.id });
-    if (!res.ok) { alert("일괄 등록 실패"); return; }
-    const r = await res.json();
-    alert(`등록 완료: 항목 ${r.createdItems}건`);
-    load();
+    const mediaFiles = Array.from(mediaRef.current?.files ?? []);
+    bulkUploadingRef.current = true;
+    setBulkUploading(true);
+    setBulkElapsedSeconds(0);
+    setBulkError(null);
+    setBulkSummary(null);
+    try {
+      const result = await uploadBulkItems(file, mediaFiles, selected.id, setBulkProgress);
+      setBulkSummary(`항목 ${result.createdItems}건 · 미디어 ${result.createdMediaAssets}건 등록 완료`);
+      if (fileRef.current) fileRef.current.value = "";
+      if (mediaRef.current) mediaRef.current.value = "";
+      void load();
+    } catch (error) {
+      setBulkError(error instanceof Error ? error.message : "일괄 등록 실패");
+    } finally {
+      bulkUploadingRef.current = false;
+      setBulkUploading(false);
+    }
   };
 
   const removeItem = async (item: Item) => {
@@ -106,16 +141,28 @@ export default function ItemsPage() {
         <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
           <div>
             <label className="label">엑셀 파일</label>
-            <input ref={fileRef} type="file" accept=".xlsx" className="input" />
+            <input ref={fileRef} type="file" accept=".xlsx" disabled={bulkUploading} className="input" />
           </div>
           <div>
             <label className="label">미디어 파일들 (다중 선택)</label>
-            <input ref={mediaRef} type="file" multiple className="input" />
+            <input ref={mediaRef} type="file" multiple disabled={bulkUploading} className="input" />
           </div>
           <div className="flex items-end">
-            <button onClick={bulkUpload} className="btn-primary w-full">일괄 등록</button>
+            <button onClick={bulkUpload} disabled={bulkUploading} className="btn-primary w-full">
+              {bulkUploading
+                ? bulkProgress?.phase === "waiting" ? "서버 응답 대기 중…" : "업로드 중…"
+                : "일괄 등록"}
+            </button>
           </div>
         </div>
+        {bulkProgress && (
+          <BulkUploadStatus
+            progress={bulkProgress}
+            elapsedSeconds={bulkElapsedSeconds}
+            error={bulkError}
+            summary={bulkSummary}
+          />
+        )}
       </details>
 
       {/* 필터 */}

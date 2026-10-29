@@ -19,6 +19,8 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
+COPY server.mjs ./server.mjs
+COPY src/lib/server/bulk-upload-settings.mjs ./src/lib/server/bulk-upload-settings.mjs
 
 # The Kubernetes workload requires a non-root runtime user. The official
 # Node Alpine image assigns its `node` user UID/GID 1000. Using numeric IDs
