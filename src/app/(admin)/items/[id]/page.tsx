@@ -29,11 +29,11 @@ export default function EditItemPage() {
       <ItemForm
         initial={item}
         submitting={saving}
-        onSubmit={async (data) => {
+        onSubmit={async (data, files) => {
           if (!selected) { alert("전시를 먼저 선택하세요."); return; }
           setSaving(true);
           try {
-            await updateItem(id, data, selected.id);
+            await updateItem(id, data, selected.id, files);
             router.push("/items");
           } catch (e) {
             alert((e as Error).message);

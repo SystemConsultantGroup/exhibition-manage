@@ -3,7 +3,7 @@
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { Exhibition } from "@/lib/types";
-import { apiFetch } from "@/lib/api";
+import { apiMultipart } from "@/lib/api";
 import { useExhibition } from "@/components/ExhibitionProvider";
 import { DOMAIN_INPUT_PATTERN, isSafeExternalUrl } from "@/lib/validation";
 
@@ -12,6 +12,7 @@ export default function EditExhibitionPage() {
   const router = useRouter();
   const { exhibitions } = useExhibition();
   const [saving, setSaving] = useState(false);
+  const [files, setFiles] = useState<Record<string, File | undefined>>({});
   const [form, setForm] = useState<Partial<Exhibition> & { customDomainInput?: string }>({});
 
   useEffect(() => {
@@ -32,10 +33,7 @@ export default function EditExhibitionPage() {
     }
     setSaving(true);
     try {
-      const res = await apiFetch(`/admin/exhibitions/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      await apiMultipart<Exhibition>(`/admin/exhibitions/${id}`, [{ name: "request", json: {
           defaultDomain: form.defaultDomain,
           customDomain: form.customDomainInput || null,
           name: form.name,
@@ -49,9 +47,9 @@ export default function EditExhibitionPage() {
           introTitle: form.introTitle || null,
           introDescription: form.introDescription || null,
           introVideoMediaId: form.introVideoMediaId ?? null,
-        }),
-      });
-      if (!res.ok) throw new Error(`수정 실패 (${res.status})`);
+          showAwards: form.showAwards,
+          defaultToLatestEventPeriod: form.defaultToLatestEventPeriod,
+        } }, ...Object.entries(files).flatMap(([name, file]) => file ? [{ name, file }] : [])], undefined, "PUT");
       alert("저장되었습니다.");
       router.push("/exhibitions");
     } catch (err) {
@@ -89,6 +87,29 @@ export default function EditExhibitionPage() {
           <Toggle label="팝업 사용" checked={!!form.popupEnabled}
             onChange={(v) => setForm((f) => ({ ...f, popupEnabled: v }))} />
         </div>
+        <div className="grid grid-cols-2 gap-4">
+          <Toggle label="수상 표시" checked={form.showAwards ?? true}
+            onChange={(v) => setForm((f) => ({ ...f, showAwards: v }))} />
+          <Toggle label="최신 발표회차 기본 선택" checked={form.defaultToLatestEventPeriod ?? false}
+            onChange={(v) => setForm((f) => ({ ...f, defaultToLatestEventPeriod: v }))} />
+        </div>
+        <fieldset className="space-y-3">
+          <legend className="label">미디어 교체 (선택하지 않으면 기존 파일 유지)</legend>
+          {([
+            ["logoFile", "logoMediaId", "로고", "image/*"],
+            ["bannerFile", "bannerMediaId", "배너", "image/*"],
+            ["popupImageFile", "popupImageMediaId", "팝업 이미지", "image/*"],
+            ["introVideoFile", "introVideoMediaId", "인트로 영상", "video/*"],
+          ] as const).map(([name, key, label, accept]) => (
+            <div key={name}>
+              <label className="label" htmlFor={name}>{label}</label>
+              <input id={name} type="file" accept={accept} className="input"
+                onChange={(e) => setFiles((f) => ({ ...f, [name]: e.target.files?.[0] }))} />
+              {form[key] && <button type="button" className="btn-ghost mt-1"
+                onClick={() => setForm((f) => ({ ...f, [key]: null }))}>기존 연결 제거</button>}
+            </div>
+          ))}
+        </fieldset>
         {form.popupEnabled && (
           <div>
             <label className="label">팝업 링크 URL</label>

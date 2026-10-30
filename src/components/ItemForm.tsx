@@ -29,6 +29,9 @@ export function ItemForm({
     participantEmails: initial?.participantEmails ?? "",
     advisorNames: initial?.advisorNames ?? "",
     awarded: initial?.awarded ?? false,
+    removeThumbnail: false,
+    removePoster: false,
+    removePresentationVideo: false,
   });
 
   useEffect(() => {
@@ -56,8 +59,7 @@ export function ItemForm({
       awarded: form.awarded,
     };
     const files: { name: string; file: File }[] = [];
-    if (!initial) {
-      // 생성 시에만 파일 첨부 가능
+    {
       for (const [ref, name] of [
         [thumbRef, "thumbnailFile"],
         [posterRef, "posterFile"],
@@ -116,22 +118,26 @@ export function ItemForm({
         </div>
       </div>
 
-      {!initial && (
+      <div>
+        {initial && <p className="text-sm text-slate-500 mb-2">파일을 선택하지 않으면 기존 미디어를 유지합니다.</p>}
         <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="label">썸네일</label>
-            <input ref={thumbRef} type="file" accept="image/*" className="input" />
+            <input ref={thumbRef} type="file" accept="image/*" className="input" disabled={form.removeThumbnail} />
+            {initial?.thumbnailMediaId && <label className="text-sm"><input type="checkbox" checked={form.removeThumbnail} onChange={(e) => { if (thumbRef.current) thumbRef.current.value = ""; setForm((f) => ({ ...f, removeThumbnail: e.target.checked })); }} /> 기존 썸네일 제거</label>}
           </div>
           <div>
             <label className="label">포스터</label>
-            <input ref={posterRef} type="file" accept="image/*" className="input" />
+            <input ref={posterRef} type="file" accept="image/*" className="input" disabled={form.removePoster} />
+            {initial?.posterMediaId && <label className="text-sm"><input type="checkbox" checked={form.removePoster} onChange={(e) => { if (posterRef.current) posterRef.current.value = ""; setForm((f) => ({ ...f, removePoster: e.target.checked })); }} /> 기존 포스터 제거</label>}
           </div>
           <div>
             <label className="label">발표 영상</label>
-            <input ref={videoRef} type="file" accept="video/*" className="input" />
+            <input ref={videoRef} type="file" accept="video/*" className="input" disabled={form.removePresentationVideo} />
+            {initial?.presentationVideoMediaId && <label className="text-sm"><input type="checkbox" checked={form.removePresentationVideo} onChange={(e) => { if (videoRef.current) videoRef.current.value = ""; setForm((f) => ({ ...f, removePresentationVideo: e.target.checked })); }} /> 기존 영상 제거</label>}
           </div>
         </div>
-      )}
+      </div>
 
       <button type="submit" disabled={submitting} className="btn-primary w-full">
         {submitting ? "저장 중…" : "저장"}
@@ -148,11 +154,7 @@ export async function createItem(
   return apiMultipart<Item>("/admin/items", [{ name: "request", json: data }, ...files], exhibitionId);
 }
 
-export async function updateItem(id: string, data: Record<string, unknown>, exhibitionId: string) {
-  return apiJson<Item>(`/admin/items/${id}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-    exhibitionId,
-  });
+export async function updateItem(id: string, data: Record<string, unknown>, exhibitionId: string,
+  files: { name: string; file: File }[] = []) {
+  return apiMultipart<Item>(`/admin/items/${id}`, [{ name: "request", json: data }, ...files], exhibitionId, "PUT");
 }

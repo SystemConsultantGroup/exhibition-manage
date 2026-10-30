@@ -78,7 +78,8 @@ export function buildQuery(params: Record<string, string | number | boolean | un
 export async function apiMultipart<T>(
   path: string,
   fields: { name: string; json?: unknown; file?: File }[],
-  exhibitionId?: string
+  exhibitionId?: string,
+  method: "POST" | "PUT" = "POST"
 ): Promise<T> {
   const files = fields.flatMap((field) => (field.file ? [field.file] : []));
   const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
@@ -94,7 +95,7 @@ export async function apiMultipart<T>(
       fd.append(f.name, f.file);
     }
   }
-  const res = await apiFetch(path, { method: "POST", body: fd, exhibitionId });
+  const res = await apiFetch(path, { method, body: fd, exhibitionId });
   if (!res.ok) throw new Error(`업로드 실패 (${res.status})`);
   return (await res.json()) as T;
 }

@@ -18,10 +18,11 @@ const ROUTES: ReadonlyArray<{ pattern: RegExp; methods: ReadonlySet<string> }> =
 			pattern: new RegExp(`^admin/exhibitions/${UUID_SOURCE}$`),
 			methods: new Set(["GET", "HEAD", "PUT", "DELETE"]),
 		},
+		{ pattern: /^admin\/categories$/, methods: new Set(["POST"]) },
 		{ pattern: /^admin\/categories\/order$/, methods: new Set(["PUT"]) },
 		{
 			pattern: new RegExp(`^admin/categories/${UUID_SOURCE}$`),
-			methods: new Set(["PUT"]),
+			methods: new Set(["PUT", "DELETE"]),
 		},
 		{ pattern: /^admin\/event-periods$/, methods: new Set(["POST"]) },
 		{

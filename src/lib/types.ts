@@ -23,6 +23,8 @@ export interface Exhibition {
   introTitle: string | null;
   introDescription: string | null;
   introVideoMediaId: string | null;
+  showAwards: boolean;
+  defaultToLatestEventPeriod: boolean;
 }
 
 export interface Category {

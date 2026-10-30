@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ChevronUp, ChevronDown, Pencil, Check, X, FolderTree } from "lucide-react";
 import type { Category, PagedResponse } from "@/lib/types";
-import { apiFetch, apiJson } from "@/lib/api";
+import { apiJson } from "@/lib/api";
 import { useExhibition } from "@/components/ExhibitionProvider";
 import { PageHeader, EmptyState } from "@/components/PageHeader";
 
@@ -13,6 +13,7 @@ export default function CategoriesPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [newName, setNewName] = useState("");
 
   const load = useCallback(async () => {
     if (!selected) return;
@@ -31,12 +32,15 @@ export default function CategoriesPage() {
     setItems(reordered);
     setSaving(true);
     try {
-      await apiFetch("/admin/categories/order", {
+      await apiJson("/admin/categories/order", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ categoryIds: reordered.map((c) => c.id) }),
         exhibitionId: selected.id,
       });
+    } catch (error) {
+      alert((error as Error).message);
+      await load();
     } finally {
       setSaving(false);
     }
@@ -46,14 +50,16 @@ export default function CategoriesPage() {
     if (!selected || !editName.trim()) return;
     setSaving(true);
     try {
-      await apiFetch(`/admin/categories/${c.id}`, {
+      await apiJson(`/admin/categories/${c.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: editName }),
         exhibitionId: selected.id,
       });
       setEditingId(null);
-      load();
+      await load();
+    } catch (error) {
+      alert((error as Error).message);
     } finally {
       setSaving(false);
     }
@@ -63,7 +69,22 @@ export default function CategoriesPage() {
 
   return (
     <div className="max-w-2xl">
-      <PageHeader title="카테고리" description="이름 변경과 순서 변경이 가능합니다 (생성·삭제는 백엔드 미지원)" />
+      <PageHeader title="카테고리" description="생성, 이름·순서 변경 및 비어 있는 카테고리 삭제" />
+      <form className="flex gap-2 mb-4" onSubmit={async (event) => {
+        event.preventDefault();
+        setSaving(true);
+        try {
+          await apiJson("/admin/categories", { method: "POST", exhibitionId: selected.id,
+            headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newName.trim() }) });
+          setNewName("");
+          await load();
+        } catch (error) { alert((error as Error).message); }
+        finally { setSaving(false); }
+      }}>
+        <input required maxLength={128} className="input" aria-label="새 카테고리 이름" value={newName}
+          onChange={(event) => setNewName(event.target.value)} />
+        <button disabled={saving || !newName.trim()} className="btn-primary whitespace-nowrap">추가</button>
+      </form>
 
       {!saving && items.length === 0 ? (
         <EmptyState message="카테고리가 없습니다." />
@@ -104,6 +125,15 @@ export default function CategoriesPage() {
                     className="btn-ghost !p-1.5 opacity-0 transition group-hover:opacity-100" aria-label="이름 변경">
                     <Pencil size={14} />
                   </button>
+                  <button className="btn-ghost !p-1.5" disabled={saving} onClick={async () => {
+                    if (!confirm(`'${c.name}' 카테고리를 삭제할까요?`)) return;
+                    setSaving(true);
+                    try {
+                      await apiJson(`/admin/categories/${c.id}`, { method: "DELETE", exhibitionId: selected.id });
+                      await load();
+                    } catch (error) { alert((error as Error).message); }
+                    finally { setSaving(false); }
+                  }}>삭제</button>
                 </>
               )}
             </div>
