@@ -7,147 +7,140 @@ event periods and board posts.
 
 ```bash
 npm ci
-npm run dev       # development
+npm run dev
 npm run build
-npm start         # standard next start; no custom server.mjs
-npm test          # direct/proxy upload, security and timeout regression tests
-npm run test:smoke # after build: actual next start, runtime CSP, 1 MiB multipart
-npx tsc --noEmit
+npm start          # standard next start; no server.mjs
+npm test           # manager-only upload, backpressure, deadlines and no-replay tests
+npm run test:smoke # after build: real Next server, multipart and streaming integrity
+npm run lint
 ```
 
-Create `.env.local` for development. In production inject environment variables
-at container startup:
+Development `.env.local`, or production container runtime environment:
 
 ```env
-# Internal/backend proxy address. Never sent to the browser.
 API_BASE_URL=http://exhibition-backend:8080
 NEXT_PUBLIC_KAKAO_REST_API_KEY=your_kakao_rest_api_key
-
-# Recommended for bulk uploads: publicly reachable API base URL.
-# Runtime setting, NOT a NEXT_PUBLIC_* build argument.
-BULK_UPLOAD_API_BASE_URL=https://api.example.com
 ```
 
-`API_BASE_URL` remains required for ordinary API calls and public tenant data.
-`BULK_UPLOAD_API_BASE_URL` is optional; it must be HTTPS (HTTP localhost is allowed
-for development). An API path prefix such as `https://api.example.com/v1` is
-preserved. Credentials, query strings and fragments are rejected. A malformed
-setting fails explicitly rather than silently sending files elsewhere.
+`API_BASE_URL` is server-only and is read at request time. It may point to an
+internal service. It is never supplied to the browser. Register the Kakao redirect
+URI as `<manager-origin>/login`.
 
-Register the Kakao redirect URI as `<manager-origin>/login`. Users with an
-incomplete profile are directed to registration.
-
-## Fast bulk upload path
+## Required upload architecture
 
 ```text
-Browser → API ingress → backend → bounded parallel MinIO transfers
+Browser → manager site/ingress → manager streaming proxy → backend → MinIO
 ```
 
-With `BULK_UPLOAD_API_BASE_URL` configured, the browser sends its native multipart
-FormData directly to `/admin/items/bulk/upload` at that base URL. This removes the
-manager ingress, Next.js server and manager-to-API hop from the multi-gigabyte data
-path. There is no base64 conversion, whole-file JavaScript read, or multipart
-reconstruction. XHR provides browser send progress. Only the final API response
-confirms DB registration and media storage; browser upload completion alone does
-not. No polling of manager-local observations occurs for direct uploads.
+**All uploads must pass through the manager site.** The browser sends only to the
+same-origin `/api/backend/admin/items/bulk/upload`. There is no public upload URL,
+URL discovery endpoint, alternate transport or browser-to-backend upload option.
+CSP `connect-src 'self'` enforces same-origin browser connections in production.
+The manager validates the route, authentication header, exhibition ID and size
+before forwarding to the server-configured backend. Backend authorization and
+exhibition scope checks remain in force.
 
-`GET /api/uploads/config` exposes only this explicitly public upload URL. It does
-not expose the internal `API_BASE_URL`. CSP is generated at request time in
-`src/proxy.ts` and permits only the configured API origin in `connect-src`, so the
-same production image supports different runtime API addresses. Bearer tokens,
-`X-Exhibition-Id` and random `X-Upload-Id` headers are sent to the configured API;
-cookies are not sent. The API still enforces authentication and tenant scope.
+### 1. Browser → manager
 
-### Required API / ingress configuration
+The browser serializes native FormData with the Excel `file` and repeated
+`mediaFiles`. File contents are not loaded into JavaScript, base64-encoded,
+compressed, or reconstructed. The client validates file count, sizes and duplicate
+names before sending and uses XHR upload progress. UI updates are limited to five
+per second during upload; phase changes and final byte counts are immediate.
+There is no preparatory public-URL request. Browser send completion does **not**
+prove receipt by the manager/backend or successful registration.
 
-- Set backend `APP_CORS_ADMIN_ALLOWED_HOSTS` to the manager hostname(s), e.g.
-  `manage.example.com`. CORS must permit POST and `Authorization`,
-  `X-Exhibition-Id`, `X-Upload-Id` request headers. The updated backend handles
-  preflight and exposes upload response headers. Do not use a wildcard origin.
-- The **public API ingress** must accept the configured body sizes and long
-  uploads/response waits. For ingress-nginx review `proxy-body-size`,
-  `proxy-request-buffering: "off"`, `proxy-read-timeout`, `proxy-send-timeout`,
-  and client-body timeouts. App changes do not configure external gateways.
-- Backend defaults are 10 MiB Excel, 1000 rows, 500 MiB per file, 10 GiB total
-  multipart body, 3001 parts (Excel + 3000 media). Client validation leaves room
-  for multipart headers. If overriding backend limits, adjust client limits too.
-- Backend `APP_UPLOAD_WORKERS` controls the shared MinIO transfer pool (default
-  4, range 1–32). Start with 4; increasing workers beyond storage/network capacity
-  can hurt throughput. JPA writes stay on the transaction thread, use JDBC
-  batches, and roll back together; storage failures clean up transferred objects.
+### 2. Manager → backend
 
-### Backward-compatible proxy path
+The manager reads incoming chunks and immediately forwards their existing byte
+buffers with backpressure. It never calls `formData()`, `arrayBuffer()` or writes
+whole uploads to manager storage. The pooled low-level Undici `request` transport
+avoids the extra Web stream/per-chunk copying used by its `fetch` wrapper. A bounded
+64 KiB Node stream queue prevents reading the whole request ahead of the backend.
+Original content type/boundary and content length are preserved; unknown-length
+bodies are counted while streaming. Backend redirects are not followed.
 
-Without `BULK_UPLOAD_API_BASE_URL`, uploads still use:
+Use an internal `API_BASE_URL` to avoid a needless public API gateway round trip.
+Manager ingress request buffering can still defeat streaming before the request
+reaches the app; configure that infrastructure explicitly.
 
-```text
-Browser → manager ingress → /api/backend streaming proxy → backend → MinIO
-```
+### 3. Backend
 
-The proxy forwards raw bytes with backpressure and a 10 GiB body limit. It does
-not call `formData()` or `arrayBuffer()`. It retains a pooled Undici agent and
-phase-aware timeouts:
+The API prevalidates the complete workbook and file references before writes,
+caches repeated category/classification lookups, batches JPA writes, and runs only
+MinIO I/O in a shared bounded worker pool. Entity/DB work stays on the transaction
+thread. File transfer failures wait for started work before cleanup; DB rollback
+also removes uploaded objects. Entity/table definitions are unchanged.
 
-- `BULK_UPLOAD_IDLE_TIMEOUT_MS`: default 120000, transfer inactivity timeout.
-- `BULK_UPLOAD_RESPONSE_TIMEOUT_MS`: default 900000, response budget beginning
-  when the outbound body is sent; includes receiving the response body.
+Defaults: Excel 10 MiB / 1000 rows, media 500 MiB each, 10 GiB total multipart,
+3001 parts. Client size validation leaves room for multipart headers. The backend's
+`APP_UPLOAD_WORKERS` defaults to 4 (range 1–32). Tune against actual network/storage
+capacity rather than setting unbounded parallelism.
+
+### Timeouts and infrastructure
+
+`npm start` uses standard `next start`. There are no custom HTTP entrypoints or
+Node monkey-patches. Proxy transport limits are:
+
+- `BULK_UPLOAD_IDLE_TIMEOUT_MS`: default 120000 for transfer inactivity.
+- `BULK_UPLOAD_RESPONSE_TIMEOUT_MS`: default 900000 after the outbound body is
+  sent; covers the response body too.
 - `BULK_UPLOAD_TIMEOUT_MS`: legacy response-budget fallback.
 
-These are **proxy transport** settings, not overrides of the standard Next/Node
-incoming HTTP server. Removing the custom server restores stock incoming request
-limits (including Node's normal request-body deadline). Use direct upload for
-large/slow transfers rather than relying on the fallback to support uploads
-longer than those limits. No Node monkey-patches or custom launch hooks are used.
+These do not override standard Next/Node incoming request deadlines (Node's
+normal request-body deadline still applies) or external ingress limits. An upload
+lasting beyond those incoming limits can still fail. Do not work around this by
+bypassing the manager. Review supported server/deployment limits separately if
+longer transfers are required.
 
-The fallback UI retains manager received/sent byte observations from
-`/api/uploads/status?id=<uuid>`. Records are bounded, expiring and tied to the
-original authorization header and exhibition ID. They are local to one process:
-other replicas/restarts can make observations unavailable. That is not evidence
-of upload failure. Socket writes are not backend/MinIO acknowledgements.
+For ingress-nginx, review `proxy-request-buffering: "off"`, `proxy-body-size`,
+`proxy-read-timeout`, `proxy-send-timeout` and the client-body timeout. Both manager
+and any backend gateway need compatible limits. These settings live outside this
+repository and are not changed by application code. Backend multipart uses disk
+temp files, so allocate sufficient backend temporary storage.
 
-### Failure handling
+### Observations and failures
 
-Neither transport automatically retries a large request, switches transport after
-failure, or replays after a 401. Credentials may be refreshed for the next manual
-attempt. After a disconnect or 5xx, inspect the item list before retrying because
-the transaction may have committed. API logs include `uploadId`, processing time
-and counts after multipart parsing. Manager proxy logs additionally identify
-`manager_upload_idle_timeout`, `manager_response_deadline`, connection errors and
-upstream HTTP responses. Tokens and file bodies are not logged. Inspect ingress
-logs too; an error response may come from a gateway rather than the application.
+The UI reports browser bytes, manager receipt, backend socket send bytes and the
+final registration result separately. `/api/uploads/status?id=<uuid>` provides
+bounded/expiring manager-local observations, tied to the original authorization
+header and exhibition ID. Missing records on another replica/restart do not prove
+failure. Socket writes are not acknowledgements of backend/MinIO persistence.
+
+Uploads are never automatically replayed after a 401, connection failure or 5xx.
+Check the item list before manually retrying an uncertain result. Logs correlate
+manager and backend requests using `X-Upload-Id`/`X-Request-Id`; backend processing
+logs begin after multipart parsing. Tokens and file contents are not logged.
 
 ## Docker
 
 ```bash
-docker build \
-  --build-arg NEXT_PUBLIC_KAKAO_REST_API_KEY=your_key \
-  -t exhibition-admin .
-
-docker run -p 3000:3000 \
-  -e API_BASE_URL=http://backend:8080 \
-  -e BULK_UPLOAD_API_BASE_URL=https://api.example.com \
-  exhibition-admin
+docker build --build-arg NEXT_PUBLIC_KAKAO_REST_API_KEY=your_key -t exhibition-admin .
+docker run -p 3000:3000 -e API_BASE_URL=http://backend:8080 exhibition-admin
 ```
 
-Only the existing Kakao public key is a build argument. Upload addresses are read
-at runtime. The image runs as numeric UID/GID 1000 and starts with `npm start`
-(`next start`). Remove deployment command overrides referencing `server.mjs`.
-
-## Admin edits
-
-- Items support multipart PUT media replacement and explicit per-slot removal;
-  omitted files retain existing connections.
-- Exhibition edits support media replacement/removal and award/latest-period
-  display settings.
-- Categories support creation, renaming, ordering and deletion when not referenced.
+Only the Kakao public key is a build argument. The image runs as numeric UID/GID
+1000. Remove deployment command overrides referencing `server.mjs`.
 
 ## Verification
 
-`npm test` covers direct uploads, no replay after 401, runtime target/CSP validation,
-proxy fallback, byte streaming, backpressure, cancellations and phase deadlines.
-Backend tests cover repeated-reference query reduction, prevalidation before side
-effects, concurrent storage I/O without JPA worker access, storage failure cleanup,
-and real H2/JPA batched persistence/rollback. These local checks are not a
-production bandwidth benchmark. Compare the same workbook/files before and after,
-recording browser send time, API processing time and final completion time; verify
-counts and references before deleting the test items.
+`npm test` checks the fixed same-origin client URL, multipart/auth preservation,
+progress-event throttling, no body replay, streaming deadlines, backpressure,
+cancellation and size limits. `npm run test:smoke` starts the real standard Next
+production server, verifies same-origin CSP/no URL discovery, uploads multipart,
+and withholds the incoming request's remaining bytes until the backend sees its
+first bytes. It checks exact size and SHA-256 for a 32 MiB streamed body.
+
+A local isolated manager-transport comparison (64 MiB, six measured alternating
+runs after warm-up) yielded median 124.9 ms with the previous fetch wrapper and
+74.9 ms with the low-level request transport. This is a local transport check,
+not a browser/ingress/production throughput guarantee. Measure the same real files
+through the manager site before and after deployment, comparing browser send time,
+manager received/sent time and backend `processingMs`.
+
+## Admin edits
+
+Items support multipart PUT media replacement/removal and classification changes.
+Exhibition edits support media replacement/removal and award/latest-period display
+settings. Categories support creation, rename/order changes and deletion when not
+referenced.

@@ -178,6 +178,37 @@ test("streamed size limits still reject oversized uploads", async t => {
     expectedFailure("manager_size_limit", 413));
 });
 
+test("proxy preserves content length and correlates the backend upload ID", async t => {
+  let receivedHeaders;
+  const { url } = await serve(t, (req, res) => {
+    receivedHeaders = req.headers;
+    req.resume();
+    req.on("end", () => res.end("ok"));
+  });
+  const { id, request, headers } = upload(new Uint8Array([1, 2, 3]), { headers: { "content-length": "3" } });
+  const response = await forwardBulkUpload(request, url, headers);
+  assert.equal(await response.text(), "ok");
+  assert.equal(receivedHeaders["content-length"], "3");
+  assert.equal(receivedHeaders["x-upload-id"], id);
+  assert.equal(receivedHeaders["x-request-id"], id);
+  assert.equal(receivedHeaders.authorization, authorization);
+});
+
+test("backend redirects are returned without replaying the upload elsewhere", async t => {
+  let requests = 0;
+  const { url } = await serve(t, (req, res) => {
+    requests++;
+    req.resume();
+    res.writeHead(307, { location: "/different-upload" });
+    res.end("redirect refused");
+  });
+  const { request, headers } = upload(new Uint8Array([1, 2, 3]));
+  const response = await forwardBulkUpload(request, url, headers);
+  assert.equal(response.status, 307);
+  assert.equal(await response.text(), "redirect refused");
+  assert.equal(requests, 1);
+});
+
 test("active upload observations survive their original expiration time", t => {
   t.mock.timers.enable({ apis: ["Date"] });
   const id = randomUUID();

@@ -12,7 +12,7 @@ const build = await mkdtemp(join(tmpdir(), "exhibition-upload-tests-"));
 try {
   await writeFile(join(build, "package.json"), JSON.stringify({ type: "module" }));
   await symlink(join(root, "node_modules"), join(build, "node_modules"), "dir");
-  for (const name of ["bulk-upload-proxy", "upload-observation", "bulk-upload-target", "proxy-security"]) {
+  for (const name of ["bulk-upload-proxy", "upload-observation", "proxy-security"]) {
     const source = await readFile(join(root, "src/lib/server", `${name}.ts`), "utf8");
     const { outputText } = ts.transpileModule(source, {
       compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },

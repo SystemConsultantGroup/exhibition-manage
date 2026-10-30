@@ -1,4 +1,5 @@
-import { Agent, fetch as streamingFetch } from "undici";
+import { Readable } from "node:stream";
+import { Agent, request as streamingRequest } from "undici";
 import { getBulkUploadIdleTimeoutMs, getBulkUploadResponseTimeoutMs } from "./bulk-upload-settings.mjs";
 import { createBulkUploadDeadline } from "./bulk-upload-deadline.mjs";
 import {
@@ -118,14 +119,15 @@ export async function forwardBulkUpload(
   if (contentLength) upstreamHeaders.set("content-length", contentLength);
   // Correlates a request at gateways/backends that already log request IDs.
   upstreamHeaders.set("x-request-id", uploadId);
+  upstreamHeaders.set("x-upload-id", uploadId);
 
   try {
-    const upstream = await withUploadObservation(entry, () => streamingFetch(targetUrl, {
+    // Low-level request consumes the byte iterator directly. Fetch would wrap it
+    // in another Web stream and copy every upload chunk into a new Uint8Array.
+    const upstream = await withUploadObservation(entry, () => streamingRequest(targetUrl, {
       method: "POST",
       headers: Object.fromEntries(upstreamHeaders),
-      body: bodyChunks(),
-      duplex: "half",
-      redirect: "manual",
+      body: Readable.from(bodyChunks(), { objectMode: false, highWaterMark: 64 * 1024 }),
       signal,
       dispatcher: uploadAgent,
     }));
@@ -133,19 +135,23 @@ export async function forwardBulkUpload(
     // stop the transfer idle timer and bound delivery of the early response too.
     deadline.waitForResponse();
     updateUploadObservation(entry, {
-      responseReceivedAt: Date.now(), responseStatus: upstream.status,
+      responseReceivedAt: Date.now(), responseStatus: upstream.statusCode,
     });
     console.info("Bulk upload upstream response headers", {
-      uploadId, status: upstream.status, elapsedMs: Date.now() - entry.status.startedAt,
+      uploadId, status: upstream.statusCode, elapsedMs: Date.now() - entry.status.startedAt,
       receivedBytes: bodyReadBytes, sentBytes: entry.status.sentBytes,
       bodyComplete, sendingFinishedAt: entry.status.sendingFinishedAt,
     });
-    const responseHeaders = new Headers(Object.fromEntries(upstream.headers));
+    const responseHeaders = new Headers();
+    for (const [name, value] of Object.entries(upstream.headers)) {
+      if (Array.isArray(value)) value.forEach(item => responseHeaders.append(name, item));
+      else if (value !== undefined) responseHeaders.set(name, value);
+    }
     responseHeaders.set("X-Upload-Id", uploadId);
-    if (upstream.status >= 400) responseHeaders.set("X-Upload-Error-Source", "upstream_http_response");
+    if (upstream.statusCode >= 400) responseHeaders.set("X-Upload-Error-Source", "upstream_http_response");
     // Reading response headers is not the same as receiving the final result.
     // Keep observing body failures after fetch() has already resolved.
-    const reader = upstream.body?.getReader();
+    const reader = Readable.toWeb(upstream.body).getReader();
     const responseBody = reader ? new ReadableStream<Uint8Array>({
       async pull(controller) {
         try {
@@ -155,7 +161,7 @@ export async function forwardBulkUpload(
             controller.close();
             reader.releaseLock();
             console.info("Bulk upload upstream response body complete", {
-              uploadId, status: upstream.status, elapsedMs: Date.now() - entry.status.startedAt,
+              uploadId, status: upstream.statusCode, elapsedMs: Date.now() - entry.status.startedAt,
             });
           } else controller.enqueue(value);
         } catch (error) {
@@ -181,7 +187,7 @@ export async function forwardBulkUpload(
     }) : null;
     if (!reader) cleanup();
     return new Response(responseBody, {
-      status: upstream.status, statusText: upstream.statusText, headers: responseHeaders,
+      status: upstream.statusCode, headers: responseHeaders,
     });
   } catch (error) {
     cleanup();

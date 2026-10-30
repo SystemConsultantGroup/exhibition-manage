@@ -30,14 +30,12 @@ export function BulkUploadStatus({ progress, elapsedSeconds, error, summary }: {
 }) {
   const { phase, loadedBytes, totalBytes, browserUploadFinished, proxy, observationAvailable } = progress;
   const inactive = phase === "completed" || phase === "failed";
-  const direct = progress.transport === "direct";
   const duration = elapsedSeconds >= 60
     ? `${Math.floor(elapsedSeconds / 60)}분 ${elapsedSeconds % 60}초` : `${elapsedSeconds}초`;
   const label = phase === "preparing" ? "업로드 준비 · 인증 확인"
     : phase === "completed" ? "등록 완료"
     : phase === "failed" ? "요청 실패 · 결과 확인 필요"
     : phase === "receiving" ? "응답 수신 중"
-    : direct ? browserUploadFinished ? "API 방향 송신 완료 · 등록 응답 대기" : "브라우저에서 API로 직접 전송 중"
     : observationAvailable && proxy?.sendingFinishedAt ? "백엔드 방향 송신 완료 · 응답 대기"
     : observationAvailable && proxy?.sendingStartedAt ? "프록시에서 백엔드 방향으로 전송 중"
     : browserUploadFinished ? "브라우저 송신 완료 · 프록시 상태 확인 중"
@@ -51,34 +49,34 @@ export function BulkUploadStatus({ progress, elapsedSeconds, error, summary }: {
       </div>
       <ol className="space-y-3">
         <li>
-          <p className="mb-1 font-medium">1. 브라우저 → {direct ? "API 앞단 (직접 전송)" : "매니저 앞단"}: {browserUploadFinished ? "송신 완료"
+          <p className="mb-1 font-medium">1. 브라우저 → 매니저 앞단: {browserUploadFinished ? "송신 완료"
             : phase === "preparing" ? "전송 전"
             : phase === "requesting" ? "요청 시작"
             : inactive ? "전송 종료" : "전송 중"}</p>
           <ByteProgress label="브라우저가 보고한 송신량" loaded={loadedBytes} total={totalBytes} finished={browserUploadFinished} />
-          <p className="text-xs text-gray-500">{direct ? "매니저를 경유하지 않습니다. 송신 완료는 API·MinIO 저장 완료를 의미하지 않습니다." : "브라우저 관측값입니다. 앞단 프록시가 버퍼링하면 매니저 수신량과 다를 수 있습니다."}</p>
+          <p className="text-xs text-gray-500">브라우저 관측값입니다. 앞단 프록시가 버퍼링하면 매니저 수신량과 다를 수 있습니다.</p>
         </li>
-        {!direct && <li>
+        <li>
           <p className="mb-1 font-medium">2. 매니저 프록시 수신: {proxy
             ? proxy.receivingFinishedAt ? "본문 수신 완료" : "수신 관측됨"
             : "아직 관측되지 않음"}</p>
           {proxy && <ByteProgress label="매니저가 실제로 읽은 본문" loaded={proxy.receivedBytes} total={proxy.totalBytes} finished={proxy.receivingFinishedAt !== null} />}
-        </li>}
-        {!direct && <li>
+        </li>
+        <li>
           <p className="mb-1 font-medium">3. 프록시 → 백엔드 연결: {proxy?.sendingFinishedAt ? "송신 완료"
             : proxy?.sendingStartedAt ? "요청 송신 시작됨" : "아직 관측되지 않음"}</p>
           {proxy && <ByteProgress label="백엔드 연결 소켓에 기록한 본문" loaded={proxy.sentBytes} total={proxy.totalBytes} finished={proxy.sendingFinishedAt !== null} />}
           <p className="text-xs text-gray-500">소켓 송신량이며, 백엔드의 수신·저장 완료를 보장하지 않습니다.</p>
-        </li>}
+        </li>
         <li>
-          <p className="font-medium">{direct ? "2" : "4"}. 백엔드 내부 처리 / MinIO 저장: {phase === "completed" ? "최종 성공 응답 확인" : "내부 진행 상황 확인 불가"}</p>
+          <p className="font-medium">4. 백엔드 내부 처리 / MinIO 저장: {phase === "completed" ? "최종 성공 응답 확인" : "내부 진행 상황 확인 불가"}</p>
           <p className="text-xs text-gray-500">백엔드가 처리 상태를 제공하지 않으므로 엑셀 검증·DB 등록·파일 저장 중 어느 단계인지는 알 수 없습니다.</p>
           {proxy?.responseStatus !== null && proxy?.responseStatus !== undefined && (
             <p className="text-xs text-gray-600">상위 서버 응답 헤더 수신: HTTP {proxy.responseStatus} (게이트웨이 응답일 수도 있음)</p>
           )}
         </li>
       </ol>
-      {!direct && !observationAvailable && phase !== "preparing" && (
+      {!observationAvailable && phase !== "preparing" && (
         <p className="text-xs text-amber-700">
           프록시 관측 정보를 현재 조회하지 못했습니다. 앞단 버퍼링·다른 서버 인스턴스·상태 조회 실패 등의 가능성이 있으며, 업로드 실패를 의미하지 않습니다.
           {proxy && " 수신·송신량은 마지막으로 관측된 값입니다."}
