@@ -10,6 +10,7 @@ export type BulkUploadPhase =
 
 export interface BulkUploadProgress {
   phase: BulkUploadPhase;
+  transport: "direct" | "proxy";
   loadedBytes: number;
   totalBytes: number | null;
   browserUploadFinished: boolean;
@@ -24,6 +25,7 @@ const UNCERTAIN_RESULT_MESSAGE =
 
 function sendMultipart(
   body: FormData,
+  url: string,
   token: string,
   exhibitionId: string,
   uploadId: string,
@@ -31,14 +33,15 @@ function sendMultipart(
 ): Promise<{ status: number; text: string; source: string | null }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/backend/admin/items/bulk/upload");
+    xhr.open("POST", url);
+    xhr.withCredentials = false;
     xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     xhr.setRequestHeader("X-Exhibition-Id", exhibitionId);
     xhr.setRequestHeader("Accept", "application/json");
     xhr.setRequestHeader("X-Upload-Id", uploadId);
     // Let the browser serialize FormData and set its multipart boundary.
-    // The proxy bounds stalled transfers and post-upload response waits separately.
-    // An actively progressing upload has no fixed browser/manager duration limit.
+    // Direct uploads bypass Next's incoming request deadline and extra network hop.
+    // Ingress/backend deadlines remain deployment responsibilities.
     xhr.timeout = 0;
     xhr.upload.onprogress = (event) => {
       report("uploading", event.loaded, event.lengthComputable ? event.total : null);
@@ -49,7 +52,7 @@ function sendMultipart(
       status: xhr.status, text: xhr.responseText,
       source: xhr.getResponseHeader("X-Upload-Error-Source"),
     });
-    xhr.onerror = () => reject(new Error(`${UNCERTAIN_RESULT_MESSAGE} 네트워크 및 매니저 프록시 로그를 확인해주세요.`));
+    xhr.onerror = () => reject(new Error(`${UNCERTAIN_RESULT_MESSAGE} 네트워크·API CORS·게이트웨이 설정을 확인해주세요.`));
     xhr.ontimeout = () => reject(new Error(UNCERTAIN_RESULT_MESSAGE));
     xhr.onabort = () => reject(new Error(`요청이 중단되었습니다. ${UNCERTAIN_RESULT_MESSAGE}`));
     report("requesting");
@@ -103,7 +106,7 @@ function isBulkUploadResult(value: unknown): value is BulkUploadResult {
   });
 }
 
-/** Same-origin streaming proxy upload. No public backend URL and no automatic body replay. */
+/** Direct API upload when configured; otherwise retain the same-origin streaming proxy. Never replay. */
 export async function uploadBulkItems(
   file: File,
   mediaFiles: File[],
@@ -113,7 +116,7 @@ export async function uploadBulkItems(
   const uploadId = crypto.randomUUID();
   let stopObserving: (() => void) | undefined;
   let progress: BulkUploadProgress = {
-    phase: "preparing", loadedBytes: 0, totalBytes: null, browserUploadFinished: false, uploadId,
+    phase: "preparing", transport: "proxy", loadedBytes: 0, totalBytes: null, browserUploadFinished: false, uploadId,
     proxy: null, observationAvailable: false, observationCheckedAt: null,
   };
   const report = (phase: BulkUploadPhase, loaded = progress.loadedBytes, total = progress.totalBytes) => {
@@ -132,18 +135,39 @@ export async function uploadBulkItems(
       throw new Error("인증이 필요합니다.");
     }
 
+    const configResponse = await fetch("/api/uploads/config", { cache: "no-store", signal: AbortSignal.timeout(10_000) });
+    if (!configResponse.ok) throw new Error("업로드 연결 설정을 가져오지 못했습니다.");
+    const config = await configResponse.json() as { uploadUrl?: unknown };
+    if (config.uploadUrl !== null && typeof config.uploadUrl !== "string") throw new Error("잘못된 업로드 연결 설정입니다.");
+    const uploadUrl = config.uploadUrl ?? "/api/backend/admin/items/bulk/upload";
+    progress = { ...progress, transport: config.uploadUrl ? "direct" : "proxy" };
+    const totalBytes = file.size + mediaFiles.reduce((sum, media) => sum + media.size, 0);
+    if (file.size > 10 * 1024 * 1024) throw new Error("엑셀 파일은 10 MiB 이하여야 합니다.");
+    if (mediaFiles.length > 3000) throw new Error("미디어는 최대 3000개까지 선택할 수 있습니다.");
+    if (mediaFiles.some((media) => media.size > 500 * 1024 * 1024)) throw new Error("각 미디어 파일은 500 MiB 이하여야 합니다.");
+    // Leave room for multipart headers/boundaries under the API's 10 GiB body limit.
+    if (totalBytes + (mediaFiles.length + 1) * 4096 > 10 * 1024 ** 3) throw new Error("전체 업로드는 multipart 헤더를 포함해 10 GiB 이하여야 합니다.");
+    const names = new Set<string>();
+    for (const media of mediaFiles) {
+      if (media.size === 0) throw new Error(`빈 미디어 파일입니다: ${media.name}`);
+      if (names.has(media.name)) throw new Error(`중복 미디어 파일명입니다: ${media.name}`);
+      names.add(media.name);
+    }
+
     const body = new FormData();
     body.append("file", file);
     for (const mediaFile of mediaFiles) body.append("mediaFiles", mediaFile);
 
-    stopObserving = observeProxyUpload(uploadId, token, exhibitionId, (proxy, available) => {
-      progress = {
-        ...progress, proxy: proxy ?? progress.proxy,
-        observationAvailable: available, observationCheckedAt: Date.now(),
-      };
-      onProgress?.(progress);
-    });
-    const response = await sendMultipart(body, token, exhibitionId, uploadId, report);
+    if (progress.transport === "proxy") {
+      stopObserving = observeProxyUpload(uploadId, token, exhibitionId, (proxy, available) => {
+        progress = {
+          ...progress, proxy: proxy ?? progress.proxy,
+          observationAvailable: available, observationCheckedAt: Date.now(),
+        };
+        onProgress?.(progress);
+      });
+    }
+    const response = await sendMultipart(body, uploadUrl, token, exhibitionId, uploadId, report);
     if (response.status === 401) {
       await refreshAccessTokenAfterUnauthorized(token);
       throw new Error("인증이 만료되어 업로드가 거부되었습니다. 다시 시도해주세요. 파일은 자동 재전송하지 않았습니다.");

@@ -5,9 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "node server.mjs",
+    "start": "next start",
     "lint": "eslint .",
-    "test": "node tests/run-bulk-upload.mjs"
+    "test": "node tests/run-bulk-upload.mjs",
+    "test:smoke": "node tests/smoke-production.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.34.0",

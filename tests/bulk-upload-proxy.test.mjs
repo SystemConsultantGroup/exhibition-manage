@@ -1,13 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createServer, request as httpRequest } from "node:http";
+import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
-import {
-  enforceIncomingRequestDeadline, incomingHttpTimeouts,
-} from "../src/lib/server/incoming-request-deadline.mjs";
 
 const build = process.env.BULK_UPLOAD_TEST_BUILD;
 const { forwardBulkUpload, BulkUploadProxyError } = await import(pathToFileURL(join(build, "bulk-upload-proxy.js")));
@@ -193,57 +190,3 @@ test("active upload observations survive their original expiration time", t => {
   assert.equal(observation(id), null);
 });
 
-test("ordinary incoming requests remain time-bounded without a global body deadline", async t => {
-  assert.equal(incomingHttpTimeouts.requestTimeout, 0);
-  assert.equal(incomingHttpTimeouts.headersTimeout, 60_000);
-  const { url } = await serve(t, (req, res) => {
-    enforceIncomingRequestDeadline(req, res, { timeoutMs: 100 });
-    req.resume();
-  }, incomingHttpTimeouts);
-  const response = await new Promise((resolve, reject) => {
-    const req = httpRequest(url, { method: "POST", headers: { "content-length": "1000" } }, resolve);
-    req.on("error", reject);
-    req.write("incomplete");
-  });
-  assert.equal(response.statusCode, 408);
-  assert.equal(response.headers["x-upload-error-source"], "manager_inbound_request_timeout");
-  response.resume();
-});
-
-test("an early response does not waive the ordinary incoming-body deadline", async t => {
-  let socket;
-  let timedOut = false;
-  const { url } = await serve(t, (req, res) => {
-    socket = req.socket;
-    enforceIncomingRequestDeadline(req, res, {
-      timeoutMs: 100, onTimeout: () => { timedOut = true; },
-    });
-    req.resume();
-    res.writeHead(401);
-    res.end();
-  }, incomingHttpTimeouts);
-  const response = await new Promise((resolve, reject) => {
-    const req = httpRequest(url, { method: "POST", headers: { "content-length": "1000" } }, resolve);
-    req.on("error", reject);
-    req.write("incomplete");
-  });
-  assert.equal(response.statusCode, 401);
-  response.resume();
-  await delay(150);
-  assert.equal(timedOut, true);
-  assert.equal(socket.destroyed, true);
-});
-
-test("a complete ordinary body may wait for its response past the body deadline", async t => {
-  let timedOut = false;
-  const { url } = await serve(t, (req, res) => {
-    enforceIncomingRequestDeadline(req, res, {
-      timeoutMs: 100, onTimeout: () => { timedOut = true; },
-    });
-    req.resume();
-    req.on("end", () => setTimeout(() => res.end("ok"), 150));
-  }, incomingHttpTimeouts);
-  const response = await fetch(url, { method: "POST", body: "complete" });
-  assert.equal(await response.text(), "ok");
-  assert.equal(timedOut, false);
-});
